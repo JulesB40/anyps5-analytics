@@ -43,8 +43,8 @@ tuned and re-run offline with `python collect_prs.py --reclassify`.
 
 | Group | Rule |
 |---|---|
-| Claude | Claude or Anthropic named in the body, a commit message or commit author, or a `claude/` branch |
-| GPT / Codex | Codex, OpenAI, ChatGPT or a GPT model named the same way, or a `codex/` branch |
+| Claude only | Claude or Anthropic named in the body, a commit message or commit author, or a `claude/` branch |
+| GPT / Codex only | Codex, OpenAI, ChatGPT or a GPT model named the same way, or a `codex/` branch |
 | Claude + GPT | both of the above |
 | Unknown AI | `AI-assisted: yes` but neither named, or another lab (Gemini, Copilot, Cursor, …) named |
 | No AI | `AI-assisted: no` and no trace of a tool |

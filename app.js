@@ -6,9 +6,9 @@
   const LAST = N - 1;
 
   const CAT = {
-    claude: { label: "Claude", color: "var(--c-claude)" },
+    claude: { label: "Claude only", color: "var(--c-claude)" },
     both: { label: "Claude + GPT", color: "var(--c-both)" },
-    gpt: { label: "GPT / Codex", color: "var(--c-gpt)" },
+    gpt: { label: "GPT / Codex only", color: "var(--c-gpt)" },
     unknown: { label: "Unknown AI", color: "var(--c-unknown)" },
     human: { label: "No AI", color: "var(--c-human)" },
     undeclared: { label: "Undeclared", color: "var(--c-undeclared)" },
@@ -455,6 +455,7 @@
     const total = cur.length;
     const mergedCount = sum(merged, r);
     const mergedOfOpened = cur.filter((i) => P.m[i] >= 0).length;
+    const withCount = (o, n) => (o.trend !== undefined ? o : { note: `${int(n)} PRs, incl. Claude + GPT` });
     const claudeTouched = (c) => c[catIndex.claude] + c[catIndex.both];
     const gptTouched = (c) => c[catIndex.gpt] + c[catIndex.both];
     const share = (v, c) => (100 * v) / Math.max(1, c.reduce((a, b) => a + b, 0));
@@ -468,8 +469,8 @@
       { label: "PRs merged", value: int(mergedCount), ...change(mergedCount, pr ? sum(merged, pr) : null, r) },
       { label: "Merged so far", value: pct(mergedOfOpened, total, 0), note: "of PRs opened in range" },
       { label: "AI-assisted", value: `${(100 * aiShare(cc)).toFixed(1)}%`, ...change(100 * aiShare(cc), pc ? 100 * aiShare(pc) : null, r, { points: true }) },
-      { label: "Claude touched", value: `${share(claudeTouched(cc), cc).toFixed(1)}%`, ...change(share(claudeTouched(cc), cc), pc ? share(claudeTouched(pc), pc) : null, r, { points: true }) },
-      { label: "GPT / Codex touched", value: `${share(gptTouched(cc), cc).toFixed(1)}%`, ...change(share(gptTouched(cc), cc), pc ? share(gptTouched(pc), pc) : null, r, { points: true }) },
+      { label: "Claude-assisted", value: `${share(claudeTouched(cc), cc).toFixed(1)}%`, ...withCount(change(share(claudeTouched(cc), cc), pc ? share(claudeTouched(pc), pc) : null, r, { points: true }), claudeTouched(cc)) },
+      { label: "GPT / Codex-assisted", value: `${share(gptTouched(cc), cc).toFixed(1)}%`, ...withCount(change(share(gptTouched(cc), cc), pc ? share(gptTouched(pc), pc) : null, r, { points: true }), gptTouched(cc)) },
       { label: "System library functions", value: lib ? pct(lib[0], lib[1]) : "–", note: lib ? `${int(lib[0])} / ${int(lib[1])} · ${signed(libGain)}` : "" },
       { label: "GPU shader instructions", value: shd ? pct(shd[0], shd[1]) : "–", note: shd ? `${int(shd[0])} / ${int(shd[1])} · ${signed(shdGain)}` : "" },
     ]);
@@ -891,7 +892,9 @@
         onclick: () => { state.evidence = k; localStorage.setItem("anyps5.evidence", k); categorize(); render(); } }, label)));
     const r = range();
     const year = dayDate(r.hi).getUTCFullYear();
-    document.getElementById("range-context").textContent = `${dayLabel(r.lo)} – ${dayLabel(r.hi)} ${year} · ${r.len > 120 ? "weekly" : "daily"} · UTC`;
+    let moved = 0;
+    if (state.evidence === "strong") for (const i of ROWS) if (P.c[i] >= r.lo && P.c[i] <= r.hi && P.ks[i] !== P.kAny[i]) moved++;
+    document.getElementById("range-context").textContent = `${state.evidence === "strong" ? `Strong only moved ${int(moved)} PRs · ` : ""}${dayLabel(r.lo)} – ${dayLabel(r.hi)} ${year} · ${r.len > 120 ? "weekly" : "daily"} · UTC`;
     const updated = new Date(D.generated);
     document.getElementById("updated").textContent = `Updated ${updated.toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "UTC" })} UTC`;
     document.getElementById("footnote").replaceChildren(

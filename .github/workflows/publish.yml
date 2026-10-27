@@ -50,12 +50,12 @@ jobs:
           git add -f data
           commit=$(git commit-tree "$(git write-tree)" -m "data $(date -u +%FT%H:%MZ)")
           git push -f origin "$commit:refs/heads/data"
-      - name: Stage site
+      - name: Capture the social preview image
         run: |
-          mkdir -p _site/data
-          cp index.html app.css app.js standalone.html google*.html _site/
-          cp data/dashboard.js _site/data/
-          touch _site/.nojekyll
+          google-chrome --headless=new --no-sandbox --disable-gpu --hide-scrollbars --window-size=1200,630 \
+            --virtual-time-budget=8000 --screenshot="$PWD/_site/og.png" \
+            "file://$PWD/_site/standalone.html?range=all&theme=dark&evidence=any#overview" || echo "preview capture failed"
+          ls -la _site
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site

@@ -1,12 +1,16 @@
 """Fold data/prs.json, data/progress.json and data/community.json into the
 compact data/dashboard.js the page loads, plus a single-file standalone.html."""
 import json
+import shutil
 from collections import Counter
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
+import seo
+
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
+SITE = ROOT / "_site"
 CATS = ["claude", "both", "gpt", "unknown", "human", "undeclared"]
 TYPES = ["feat", "fix", "test", "perf", "refactor", "docs", "build", "ci", "chore", "style", "revert", "other"]
 DISCLOSURE = ["yes", "no", "blank", "missing"]
@@ -124,13 +128,24 @@ def main():
     }
     payload = json.dumps(out, separators=(",", ":"))
     (DATA / "dashboard.js").write_text(f"window.ANYPS5={payload};\n", encoding="utf-8")
-    html = (ROOT / "index.html").read_text(encoding="utf-8")
+    page = seo.decorate((ROOT / "index.html").read_text(encoding="utf-8"), prs, progress, games, out["generated"])
     css = (ROOT / "app.css").read_text(encoding="utf-8")
     js = (ROOT / "app.js").read_text(encoding="utf-8")
-    html = html.replace('<link rel="stylesheet" href="app.css">', f"<style>{css}</style>")
+    html = page.replace('<link rel="stylesheet" href="app.css">', f"<style>{css}</style>")
     html = html.replace('<script src="data/dashboard.js"></script>', f"<script>window.ANYPS5={payload};</script>")
     html = html.replace('<script src="app.js"></script>', f"<script>{js}</script>")
     (ROOT / "standalone.html").write_text(html, encoding="utf-8")
+
+    if SITE.exists():
+        shutil.rmtree(SITE)
+    (SITE / "data").mkdir(parents=True)
+    (SITE / "index.html").write_text(page, encoding="utf-8")
+    (SITE / "standalone.html").write_text(html, encoding="utf-8")
+    (SITE / "data" / "dashboard.js").write_text(f"window.ANYPS5={payload};\n", encoding="utf-8")
+    (SITE / "sitemap.xml").write_text(seo.sitemap(out["generated"]), encoding="utf-8")
+    (SITE / ".nojekyll").write_text("", encoding="utf-8")
+    for name in ["app.css", "app.js", *[p.name for p in ROOT.glob("google*.html")]]:
+        shutil.copy(ROOT / name, SITE / name)
     print(f"{len(days)} days, {len(prs)} PRs, {len(author_list)} authors, dashboard.js {len(payload) // 1024} KB")
 
 

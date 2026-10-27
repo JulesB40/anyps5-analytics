@@ -53,7 +53,7 @@ jobs:
       - name: Stage site
         run: |
           mkdir -p _site/data
-          cp index.html app.css app.js standalone.html _site/
+          cp index.html app.css app.js standalone.html google*.html _site/
           cp data/dashboard.js _site/data/
           touch _site/.nojekyll
       - uses: actions/upload-pages-artifact@v3

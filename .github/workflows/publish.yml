@@ -1,0 +1,63 @@
+name: Refresh and publish
+
+on:
+  schedule:
+    - cron: "23 * * * *"
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Restore data from the data branch
+        run: |
+          if git fetch --depth=1 origin data; then git checkout FETCH_HEAD -- data; fi
+      - name: Clone AnyPS5 history
+        run: git clone --filter=blob:none --no-checkout https://github.com/boykopovar/AnyPS5 "$RUNNER_TEMP/AnyPS5"
+      - name: Collect
+        env:
+          GH_TOKEN: ${{ github.token }}
+        working-directory: scripts
+        run: |
+          python collect_prs.py
+          python collect_community.py
+          python progress_history.py --anyps5 "$RUNNER_TEMP/AnyPS5" --ref origin/main
+          python build_dashboard.py
+      - name: Save data to the data branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          export GIT_INDEX_FILE="$RUNNER_TEMP/data.index"
+          git add -f data
+          commit=$(git commit-tree "$(git write-tree)" -m "data $(date -u +%FT%H:%MZ)")
+          git push -f origin "$commit:refs/heads/data"
+      - name: Stage site
+        run: |
+          mkdir -p _site/data
+          cp index.html app.css app.js standalone.html _site/
+          cp data/dashboard.js _site/data/
+          touch _site/.nojekyll
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deploy
+        uses: actions/deploy-pages@v4

@@ -176,7 +176,7 @@ def fetch(full, page_size):
     started = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     previous = None if full else (load(SLIM) or {}).get("fetchedAt")
     if previous:
-        since = (datetime.fromisoformat(previous.replace("Z", "+00:00")) - timedelta(hours=6)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        since = (datetime.fromisoformat(previous.replace("Z", "+00:00")) - timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
         query = QUERY % ("UPDATED_AT", "DESC", FIELDS)
         stop = lambda nodes: bool(nodes) and nodes[-1]["updatedAt"] < since
         print(f"incremental fetch of PRs updated since {since}")

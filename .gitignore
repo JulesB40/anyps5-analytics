@@ -1,2 +1,5 @@
 .cache/
 __pycache__/
+_site/
+data/
+standalone.html

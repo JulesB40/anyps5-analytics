@@ -13,14 +13,18 @@ A dashboard for [boykopovar/AnyPS5](https://github.com/boykopovar/AnyPS5), style
 
 ## View it
 
-Open `standalone.html` (everything inlined, works offline) or `index.html` (loads `data/dashboard.js`).
-No build step and no dependencies.
+Live at **https://julesb40.github.io/anyps5-analytics/**, refreshed every hour.
 
-## Refresh the data
+`.github/workflows/publish.yml` runs at :23 past every hour and on every push to `main`: it restores the
+previous data from the `data` branch, fetches what changed, rebuilds, saves the data back to `data`
+(a single force-pushed commit, so history doesn't grow) and deploys to GitHub Pages.
+
+## Run it locally
 
 Needs Python 3.12+, an authenticated `gh` CLI and a clone of AnyPS5.
 
 ```sh
+git fetch origin data && git checkout origin/data -- data && git reset -q data
 cd scripts
 python collect_prs.py              # incremental; --full refetches every PR
 python collect_community.py
@@ -28,7 +32,7 @@ python progress_history.py --anyps5 ../../AnyPS5   # --full replays every day
 python build_dashboard.py
 ```
 
-`.github/workflows/refresh.yml` runs the same steps every day at 03:17 UTC and commits the result.
+Then open `standalone.html` (everything inlined) or `index.html`. No build step and no dependencies.
 `collect_prs.py` keeps PR bodies and commit messages in `.cache/` (git-ignored), so the classifier can be
 tuned and re-run offline with `python collect_prs.py --reclassify`.
 

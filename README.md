@@ -5,7 +5,10 @@ A dashboard for [boykopovar/AnyPS5](https://github.com/boykopovar/AnyPS5), style
 
 - **Pull requests**: opened, merged, closed, backlog, time to merge, Conventional Commit type, code churn
 - **AI tools**: which PRs were written with Claude, GPT / Codex, both, an unknown AI, or no AI,
-  plus merge rate and speed per group and how often the template's `AI-assisted` field is filled in
+  plus merge rate, type-adjusted merge rate (same mix of change types and sizes for every group),
+  merge rate per change type and size, and how often the template's `AI-assisted` field is filled in
+- **Games**: PRs whose `Unblocks:` field names a title ID, games unblocked over time, which tools did it,
+  and a table of every game linked to its Game bring-up discussion
 - **Progress**: system library functions and GPU shader instructions, measured by replaying
   AnyPS5's own `tools/progress.py` on the last `main` commit of every UTC day, per library and per encoding
 - **Contributors**: active and first-time contributors, a leaderboard with each person's tool mix
@@ -48,5 +51,13 @@ tuned and re-run offline with `python collect_prs.py --reclassify`.
 | Undeclared | no answer in the template |
 
 Bot PRs are excluded. Mentions of `CLAUDE.md` / `AGENTS.md` don't count.
+
+The **Evidence** switch picks how strict the Claude / GPT attribution is. *Any mention* counts a tool
+named anywhere in the PR or its commits. *Strong only* counts it only from Co-Authored-By / Assisted-by
+trailers, "Generated with" footers, commit authors, `claude/` / `codex/` branches, or the author's own
+`AI-assisted:` answer; PRs that merely mention a tool fall back to Unknown AI.
+
+Changing the rules in `collect_prs.py` means bumping `CLASSIFIER_VERSION`; the next run then refetches
+and reclassifies every PR so old and new PRs follow the same rules.
 
 GitHub hides the stargazer list for AnyPS5, so star history starts from the first snapshot.

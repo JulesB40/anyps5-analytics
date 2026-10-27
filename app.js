@@ -17,12 +17,15 @@
   const TYPE_SLOTS = ["feat", "fix", "test", "perf", "refactor", "docs"];
   const SLOT = ["var(--s1)", "var(--s2)", "var(--c-gpt)", "var(--c-unknown)", "var(--t5)", "var(--t6)", "var(--t7)"];
   const DISCLOSURE_LABEL = { yes: "Says yes", no: "Says no", blank: "Left blank", missing: "No field" };
-  const TABS = [["overview", "Overview"], ["prs", "Pull requests"], ["ai", "AI tools"], ["progress", "Progress"], ["contributors", "Contributors"], ["community", "Community"]];
+  const TABS = [["overview", "Overview"], ["prs", "Pull requests"], ["ai", "AI tools"], ["games", "Games"], ["progress", "Progress"], ["contributors", "Contributors"], ["community", "Community"]];
   const RANGES = [["7", "7d"], ["30", "30d"], ["90", "90d"], ["all", "All"]];
+  const EVIDENCE = [["any", "Any mention"], ["strong", "Strong only"]];
+  const query = new URLSearchParams(location.search);
 
   const state = {
     tab: TABS.some(([k]) => k === location.hash.slice(1)) ? location.hash.slice(1) : "overview",
-    range: new URLSearchParams(location.search).get("range") || localStorage.getItem("anyps5.range") || "all",
+    range: query.get("range") || localStorage.getItem("anyps5.range") || "all",
+    evidence: query.get("evidence") || localStorage.getItem("anyps5.evidence") || "any",
     mode: "count",
     theme: new URLSearchParams(location.search).get("theme") || localStorage.getItem("anyps5.theme") || "dark",
   };
@@ -74,17 +77,28 @@
   const P = D.prs;
   const unpack = (str) => Array.from(str, (ch) => parseInt(ch, 16));
   const unrle = (runs) => { const out = []; for (let i = 0; i < runs.length; i += 2) for (let j = 0; j < runs[i + 1]; j++) out.push(runs[i]); return out; };
-  for (const key of ["k", "t", "d", "dr"]) P[key] = unpack(P[key]);
+  for (const key of ["k", "ks", "t", "d", "dr"]) P[key] = unpack(P[key] || P.k);
+  P.kAny = P.k;
   P.m = P.m.map((v, i) => (v < 0 ? -1 : P.c[i] + v));
   P.x = P.x.map((v, i) => (v < 0 ? -1 : P.c[i] + v));
   const otherBits = P.o;
   P.o = new Array(P.c.length).fill(0);
   for (const [i, v] of Object.entries(otherBits)) P.o[Number(i)] = v;
+  const unblockMap = P.u || {};
+  P.u = new Array(P.c.length).fill(null);
+  for (const [i, v] of Object.entries(unblockMap)) P.u[Number(i)] = v;
+  const TITLES = (D.titles || []).map(([id, name, discussion]) => ({ id, name, discussion }));
   for (const group of [D.progress.libs, D.progress.enc]) for (const name in group) group[name] = group[name].map(unrle);
   const ROWS = P.c.map((_, i) => i);
   const catIndex = Object.fromEntries(D.cats.map((c, i) => [c, i]));
 
-  const openedByCat = D.cats.map(zeros);
+  let openedByCat = [];
+  function categorize() {
+    P.k = state.evidence === "strong" ? P.ks : P.kAny;
+    openedByCat = D.cats.map(zeros);
+    for (const i of ROWS) openedByCat[P.k[i]][P.c[i]]++;
+  }
+  categorize();
   const openedByType = D.types.map(zeros);
   const disclosureByDay = D.disclosure.map(zeros);
   const opened = zeros(), merged = zeros(), closedUnmerged = zeros(), added = zeros(), deleted = zeros();
@@ -95,7 +109,6 @@
   for (const i of ROWS) {
     const c = P.c[i];
     opened[c]++;
-    openedByCat[P.k[i]][c]++;
     openedByType[P.t[i]][c]++;
     disclosureByDay[P.d[i]][c]++;
     activeByDay[c].add(P.a[i]);
@@ -400,7 +413,7 @@
           const cls = c.cls ? (typeof c.cls === "function" ? c.cls(r) : c.cls) : "";
           const td = h("td", { class: cls });
           const out = c.render(r);
-          const nodes = (Array.isArray(out) ? out : [out]).map((o) => (o instanceof Node ? o : document.createTextNode(String(o))));
+          const nodes = (Array.isArray(out) ? out : [out]).filter((o) => o != null).map((o) => (o instanceof Node ? o : document.createTextNode(String(o))));
           if (cls === "name") td.append(h("span", { class: "cell-name" }, nodes));
           else td.append(...nodes);
           return td;
@@ -564,18 +577,41 @@
       }
       return den ? (100 * num) / den : null;
     };
+    const kindOf = (i) => (TYPE_SLOTS.includes(D.types[P.t[i]]) ? D.types[P.t[i]] : "other");
+    const sizeOf = (i) => { const n = P.ad[i] + P.de[i]; return n < 50 ? "S" : n <= 500 ? "M" : "L"; };
+    const stratumOf = (i) => `${kindOf(i)}|${sizeOf(i)}`;
+    const done = (i) => P.m[i] >= 0 || P.x[i] >= 0;
+    const weights = new Map();
+    for (const i of cur) if (done(i)) weights.set(stratumOf(i), (weights.get(stratumOf(i)) || 0) + 1);
+    const outcome = (list) => { let m = 0, n = 0; for (const i of list) if (done(i)) { n++; if (P.m[i] >= 0) m++; } return { m, n, rate: n ? m / n : null }; };
+    const adjusted = (list) => {
+      const cells = new Map();
+      for (const i of list) if (done(i)) { const s = stratumOf(i), c = cells.get(s) || { m: 0, n: 0 }; c.n++; if (P.m[i] >= 0) c.m++; cells.set(s, c); }
+      let num = 0, den = 0;
+      for (const [s, c] of cells) if (c.n >= 3) { num += weights.get(s) * (c.m / c.n); den += weights.get(s); }
+      return den ? num / den : null;
+    };
     const fare = D.cats.map((c) => {
       const list = cur.filter((i) => D.cats[P.k[i]] === c);
       const m = list.filter((i) => P.m[i] >= 0);
       const closed = list.filter((i) => P.x[i] >= 0);
       return {
-        c, n: list.length, merged: m.length, closed: closed.length,
+        c, list, n: list.length, merged: m.length, closed: closed.length,
         rate: m.length + closed.length ? m.length / (m.length + closed.length) : null,
+        adjusted: adjusted(list),
         hours: median(m.map((i) => P.h[i])),
         size: median(list.map((i) => P.ad[i] + P.de[i])),
         authors: new Set(list.map((i) => P.a[i])).size,
       };
     });
+    const rateBar = (rate) => [rate == null ? "–" : `${(100 * rate).toFixed(0)}%`, h("span", { class: "pct-bar" }, h("b", { style: `width:${100 * (rate || 0)}%` }))];
+    const breakdown = [
+      ...[...TYPE_SLOTS, "other"].map((k) => ({ key: `t-${k}`, label: k, test: (i) => kindOf(i) === k })),
+      { key: "s-S", label: "< 50 lines", test: (i) => sizeOf(i) === "S" },
+      { key: "s-M", label: "50–500", test: (i) => sizeOf(i) === "M" },
+      { key: "s-L", label: "> 500", test: (i) => sizeOf(i) === "L" },
+    ];
+    const matrixRows = fare.filter((x) => x.n).map((x) => ({ ...x, cells: Object.fromEntries(breakdown.map((b) => [b.key, outcome(x.list.filter(b.test))])) }));
     return h("div", {},
       stats([
         { label: "AI-assisted", value: pct(AI_CATS.reduce((a, c) => a + cc[catIndex[c]], 0), total), note: "Claude, GPT, both or unknown" },
@@ -583,7 +619,7 @@
         { label: "GPT / Codex only", value: pct(cc[catIndex.gpt], total), note: `${int(cc[catIndex.gpt])} PRs` },
         { label: "Both", value: pct(cc[catIndex.both], total), note: `${int(cc[catIndex.both])} PRs` },
         { label: "Unknown AI", value: pct(cc[catIndex.unknown], total), note: "says yes, names no tool" },
-        { label: "Template filled", value: pct(filled, total), note: `${int(saidNo)} said no but carry an AI trailer` },
+        { label: "Template filled", value: pct(filled, total), note: `${int(saidNo)} said no but name Claude or GPT` },
       ], "six"),
       section("Share of new PRs", "7-day rolling, % of PRs opened",
         h("div", { class: "pop-panel-body solo" }, chartCard(null, null, draws, (box) => lines(box, {
@@ -593,7 +629,7 @@
             { label: "Unknown AI", short: "Unknown AI", color: CAT.unknown.color, get: rolling(["unknown"]) },
             { label: "No AI", short: "No AI", color: CAT.human.color, get: rolling(["human"]) },
           ] })))),
-      section("How each group fares", "PRs opened in range; merge rate counts closed PRs only",
+      section("How each group fares", "PRs opened in range; merge rates count closed PRs only",
         dataTable({
           rows: fare, sortKey: "n", limit: 10,
           columns: [
@@ -601,10 +637,24 @@
             { key: "n", label: "PRs", sort: (x) => x.n, render: (x) => int(x.n) },
             { key: "share", label: "Share", sort: (x) => x.n, render: (x) => pct(x.n, total) },
             { key: "merged", label: "Merged", sort: (x) => x.merged, render: (x) => int(x.merged) },
-            { key: "rate", label: "Merge rate", sort: (x) => x.rate ?? -1, render: (x) => [x.rate == null ? "–" : `${(100 * x.rate).toFixed(0)}%`, h("span", { class: "pct-bar" }, h("b", { style: `width:${100 * (x.rate || 0)}%` }))] },
+            { key: "rate", label: "Merge rate", sort: (x) => x.rate ?? -1, render: (x) => rateBar(x.rate) },
+            { key: "adjusted", label: "Type-adjusted", sort: (x) => x.adjusted ?? -1, render: (x) => rateBar(x.adjusted) },
             { key: "hours", label: "Median to merge", sort: (x) => x.hours ?? 1e9, render: (x) => hours(x.hours) },
             { key: "size", label: "Median lines", sort: (x) => x.size ?? 0, render: (x) => (x.size == null ? "–" : int(x.size)) },
             { key: "authors", label: "Authors", sort: (x) => x.authors, render: (x) => int(x.authors) },
+          ],
+        })),
+      section("Merge rate by kind of change", "merged ÷ closed, per group; faded cells have fewer than 10 closed PRs",
+        dataTable({
+          rows: matrixRows, sortKey: "n", limit: 10,
+          columns: [
+            { key: "c", label: "Group", asc: true, sort: (x) => D.cats.indexOf(x.c), cls: "name", render: (x) => [h("i", { class: "swatch", style: `background:${CAT[x.c].color}` }), CAT[x.c].label] },
+            { key: "n", label: "PRs", sort: (x) => x.n, cls: "muted", render: (x) => int(x.n) },
+            ...breakdown.map((b) => ({
+              key: b.key, label: b.label, sort: (x) => x.cells[b.key].rate ?? -1,
+              cls: (x) => (x.cells[b.key].n < 10 ? "muted" : ""),
+              render: (x) => { const c = x.cells[b.key]; return c.n ? h("span", { title: `${c.m} merged of ${c.n} closed` }, `${(100 * c.rate).toFixed(0)}%`) : "–"; },
+            })),
           ],
         })),
       section("Disclosure", null,
@@ -754,7 +804,79 @@
           ] }))))));
   }
 
-  const VIEWS = { overview: viewOverview, prs: viewPrs, ai: viewAi, progress: viewProgress, contributors: viewContributors, community: viewCommunity };
+  function viewGames(r, draws) {
+    const bks = buckets(r);
+    const rows = ROWS.filter((i) => P.u[i] && P.u[i].length);
+    const mergedIn = (i, b) => P.m[i] >= b.lo && P.m[i] <= b.hi;
+    const mergedR = rows.filter((i) => mergedIn(i, r));
+    const openNow = rows.filter((i) => P.m[i] < 0 && P.x[i] < 0);
+    const firstMerge = new Map(), firstNamed = new Map();
+    for (const i of rows) for (const t of P.u[i]) {
+      if (!firstNamed.has(t) || P.c[i] < firstNamed.get(t)) firstNamed.set(t, P.c[i]);
+      if (P.m[i] >= 0 && (!firstMerge.has(t) || P.m[i] < firstMerge.get(t))) firstMerge.set(t, P.m[i]);
+    }
+    const reachedIn = new Set();
+    for (const i of mergedR) for (const t of P.u[i]) reachedIn.add(t);
+    const newGames = [...firstMerge.values()].filter((d) => d >= r.lo && d <= r.hi).length;
+    const cc = countCats(mergedR);
+    const mergedAll = sum(merged, r);
+    const byCat = D.cats.map(zeros);
+    for (const i of rows) if (P.m[i] >= 0) byCat[P.k[i]][P.m[i]]++;
+    const series = D.cats.map((c) => ({ label: CAT[c].label, color: CAT[c].color, get: (b) => sum(byCat[catIndex[c]], b) }));
+    const cumulative = (map) => { const per = zeros(); for (const d of map.values()) per[d]++; const out = []; per.reduce((run, v) => (out.push(run + v), run + v), 0); return out; };
+    const reached = cumulative(firstMerge), named = cumulative(firstNamed);
+    const games = new Map();
+    for (const i of rows) for (const t of P.u[i]) {
+      if (!games.has(t)) games.set(t, { t, inRange: 0, all: 0, open: 0, last: -1, cats: new Array(D.cats.length).fill(0), people: new Set() });
+      const g = games.get(t);
+      if (P.m[i] >= 0) {
+        g.all++;
+        g.cats[P.k[i]]++;
+        g.last = Math.max(g.last, P.m[i]);
+        if (mergedIn(i, r)) g.inRange++;
+      } else if (P.x[i] < 0) g.open++;
+      g.people.add(P.a[i]);
+    }
+    const share = (cats) => pct(cats.reduce((a, c) => a + cc[catIndex[c]], 0), mergedR.length);
+    const gameName = (t) => TITLES[t].name || TITLES[t].id;
+    return h("div", {},
+      stats([
+        { label: "Games unblocked", value: int(reachedIn.size), note: "had an unblocking PR merged" },
+        { label: "First-time unblocks", value: int(newGames), note: `${int(firstMerge.size)} games all time` },
+        { label: "Unblocking PRs merged", value: int(mergedR.length), note: `${pct(mergedR.length, mergedAll)} of merged PRs` },
+        { label: "By Claude", value: share(["claude", "both"]), note: "of unblocking PRs, incl. both" },
+        { label: "By GPT / Codex", value: share(["gpt", "both"]), note: "of unblocking PRs, incl. both" },
+        { label: "Waiting", value: int(openNow.length), note: "open PRs that name a game" },
+      ], "six"),
+      section("Game-unblocking PRs merged", `PRs whose Unblocks field names a title ID, by merge day; first used ${rows.length ? dayLabel(Math.min(...rows.map((i) => P.c[i]))) : "–"}`,
+        h("div", { class: "section-head" }, legend(series)),
+        h("div", { class: "pop-panel-body" },
+          chartCard(null, null, draws, (box) => bars(box, { bks, series, totalLabel: "Unblocking PRs" })),
+          rankPanel(D.cats.map((c) => ({ name: CAT[c].label, color: CAT[c].color, value: int(cc[catIndex[c]]), share: mergedR.length ? cc[catIndex[c]] / mergedR.length : 0 })).filter((x) => x.share > 0).sort((a, b) => b.share - a.share)))),
+      section("Games reached", "distinct titles over time",
+        h("div", { class: "pop-panel-body solo" }, chartCard(null, null, draws, (box) => lines(box, {
+          bks, height: 240, series: [
+            { label: "Named in any PR", short: "Named", color: "var(--fg-3)", dash: "4 4", get: (b) => named[b.hi] },
+            { label: "Unblocked by a merged PR", short: "Unblocked", color: "var(--accent)", area: true, get: (b) => reached[b.hi] },
+          ] })))),
+      section("Games", "every title named in an Unblocks field; links go to its bring-up discussion",
+        dataTable({
+          rows: [...games.values()], sortKey: "inRange", limit: 30, search: (g) => `${TITLES[g.t].id} ${gameName(g.t)}`,
+          columns: [
+            { key: "name", label: "Game", asc: true, sort: (g) => gameName(g.t).toLowerCase(), cls: "name", render: (g) => [
+              TITLES[g.t].discussion ? h("a", { href: `https://github.com/${D.repo}/discussions/${TITLES[g.t].discussion}`, target: "_blank", rel: "noopener" }, gameName(g.t)) : gameName(g.t),
+              TITLES[g.t].name ? h("span", { class: "muted-id" }, TITLES[g.t].id) : null] },
+            { key: "inRange", label: "Merged in range", sort: (g) => g.inRange, cls: (g) => (g.inRange ? "" : "muted"), render: (g) => int(g.inRange) },
+            { key: "all", label: "Merged all time", sort: (g) => g.all, render: (g) => int(g.all) },
+            { key: "open", label: "Open", sort: (g) => g.open, cls: "muted", render: (g) => int(g.open) },
+            { key: "people", label: "Contributors", sort: (g) => g.people.size, render: (g) => int(g.people.size) },
+            { key: "last", label: "Last merged", sort: (g) => g.last, cls: "muted", render: (g) => (g.last < 0 ? "–" : dayLabel(g.last)) },
+            { key: "mix", label: "Tool mix", sort: (g) => (g.all ? (g.cats[catIndex.claude] + g.cats[catIndex.both]) / g.all : -1), render: (g) => h("span", { class: "mix", title: D.cats.map((c, k) => `${CAT[c].label}: ${g.cats[k]}`).join("\n") }, D.cats.map((c, k) => (g.cats[k] ? h("b", { style: `width:${(100 * g.cats[k]) / g.all}%;background:${CAT[c].color}` }) : null))) },
+          ],
+        })));
+  }
+
+  const VIEWS = { overview: viewOverview, prs: viewPrs, ai: viewAi, games: viewGames, progress: viewProgress, contributors: viewContributors, community: viewCommunity };
 
   function chrome() {
     document.documentElement.dataset.theme = state.theme;
@@ -763,6 +885,10 @@
       h("button", { type: "button", class: k === state.tab ? "active" : "", "aria-current": k === state.tab ? "page" : null, onclick: () => { state.tab = k; history.replaceState(null, "", `#${k}`); render(); } }, label)));
     document.getElementById("range").replaceChildren(...RANGES.map(([k, label]) =>
       h("button", { type: "button", class: k === state.range ? "active" : "", "aria-pressed": k === state.range ? "true" : "false", onclick: () => { state.range = k; localStorage.setItem("anyps5.range", k); render(); } }, label)));
+    document.getElementById("evidence").replaceChildren(h("span", { class: "switch-label" }, "Evidence"), ...EVIDENCE.map(([k, label]) =>
+      h("button", { type: "button", class: k === state.evidence ? "active" : "", "aria-pressed": k === state.evidence ? "true" : "false",
+        title: k === "strong" ? "Count Claude or GPT only from Co-Authored-By trailers, tool footers, commit authors, codex/ or claude/ branches, or the author's own AI-assisted answer" : "Also count Claude or GPT when the PR text merely mentions them",
+        onclick: () => { state.evidence = k; localStorage.setItem("anyps5.evidence", k); categorize(); render(); } }, label)));
     const r = range();
     const year = dayDate(r.hi).getUTCFullYear();
     document.getElementById("range-context").textContent = `${dayLabel(r.lo)} – ${dayLabel(r.hi)} ${year} · ${r.len > 120 ? "weekly" : "daily"} · UTC`;
@@ -770,7 +896,8 @@
     document.getElementById("updated").textContent = `Updated ${updated.toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "UTC" })} UTC`;
     document.getElementById("footnote").replaceChildren(
       h("p", {}, "Source: ", h("a", { href: `https://github.com/${D.repo}`, target: "_blank", rel: "noopener" }, D.repo), " pull requests via the GitHub API, and ", h("a", { href: "https://boykopovar.github.io/AnyPS5/progress.html", target: "_blank", rel: "noopener" }, "tools/progress.py"), " replayed on the last main commit of every UTC day with today's rules."),
-      h("p", {}, "Claude and GPT / Codex come from the PR body, branch name (claude/…, codex/…) and commit messages or authors (Co-Authored-By trailers, Claude Code and Codex footers). Unknown AI says AI-assisted: yes but names neither, or names another lab. No AI says AI-assisted: no with no trace; Undeclared has no answer. Bot PRs are excluded."));
+      h("p", {}, "Claude and GPT / Codex come from the PR body, branch name (claude/…, codex/…) and commit messages or authors (Co-Authored-By trailers, Claude Code and Codex footers). Strong only ignores PRs that merely mention a tool in their text and keeps trailers, footers, commit authors, branches and the author's own AI-assisted answer. Unknown AI says AI-assisted: yes but names neither, or names another lab. No AI says AI-assisted: no with no trace; Undeclared has no answer. Bot PRs are excluded."),
+      h("p", {}, "A tool appearing on a PR shows it was used, not how much of the code it wrote. Merge rate reflects review outcomes, not code quality; the type-adjusted rate compares groups on the same mix of change types and sizes. Games come from the template's Unblocks field and the Game bring-up discussion titles."));
   }
 
   function render() {

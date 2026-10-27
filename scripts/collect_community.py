@@ -4,6 +4,7 @@ GitHub does not list stargazers for this repository, so star history is built
 from one snapshot per day going forward."""
 import argparse
 import json
+import re
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
@@ -65,6 +66,38 @@ def daily(query, path, field, known):
     return dict(sorted(merged.items()))
 
 
+DISCUSSIONS = """
+query($owner: String!, $name: String!, $first: Int!, $cursor: String) {
+  repository(owner: $owner, name: $name) {
+    discussions(first: $first, after: $cursor, orderBy: {field: CREATED_AT, direction: ASC}) {
+      pageInfo { hasNextPage endCursor }
+      nodes { number title createdAt closed category { name } comments { totalCount } }
+    }
+  }
+}
+"""
+TITLE_ID = re.compile(r"\b([A-Z]{4}\d{5})\b", re.I)
+
+
+def games():
+    found = {}
+    for nodes in paginate(DISCUSSIONS, ("repository", "discussions"), 100):
+        for node in nodes:
+            if node["category"]["name"] != "Game bring-up":
+                continue
+            ids = []
+            for match in TITLE_ID.findall(node["title"]):
+                if match.upper() not in ids:
+                    ids.append(match.upper())
+            name = re.split(r"[(\[]|\b[A-Z]{4}\d{5}\b", node["title"], maxsplit=1, flags=re.I)[0].strip(" -:|,")
+            for title_id in ids:
+                if title_id in found:
+                    continue
+                found[title_id] = {"name": name or title_id, "discussion": node["number"], "created": node["createdAt"],
+                                   "closed": node["closed"], "comments": node["comments"]["totalCount"]}
+    return dict(sorted(found.items()))
+
+
 def snapshot(known):
     repo = graphql(SNAPSHOT, owner=REPO_OWNER, name=REPO_NAME)["repository"]
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -97,11 +130,12 @@ def main():
         "snapshots": snapshot(old.get("snapshots", {})),
         "forks": daily(FORKS, ("repository", "forks"), "createdAt", {} if args.full else old.get("forks", {})),
         "issues": issues(),
+        "games": games(),
     }
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(json.dumps(out, separators=(",", ":")), encoding="utf-8")
     print(f"stars {out['snapshots'][max(out['snapshots'])]['stars']} forks {sum(out['forks'].values())} "
-          f"issues {sum(out['issues']['opened'].values())}")
+          f"issues {sum(out['issues']['opened'].values())} games {len(out['games'])}")
 
 
 if __name__ == "__main__":

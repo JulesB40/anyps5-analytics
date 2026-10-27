@@ -16,6 +16,7 @@ from gh import paginate
 ROOT = Path(__file__).resolve().parent.parent
 SLIM = ROOT / "data" / "prs.json"
 RAW = ROOT / ".cache" / "prs_raw.json"
+CLASSIFIER_VERSION = 2
 
 FIELDS = """
 number title state isDraft createdAt mergedAt closedAt updatedAt
@@ -62,6 +63,11 @@ OTHER = {
 }
 CONVENTIONAL = re.compile(r"^\s*([a-zA-Z]+)(?:\([^)]*\))?!?\s*:")
 TYPES = {"feat", "fix", "test", "docs", "refactor", "perf", "build", "ci", "chore", "style", "revert"}
+TRAILER = re.compile(r"(?im)^[ \t>*-]*(?:co-authored-by|assisted-by|generated-by|ai-assistant|tool)[ \t]*:.*$")
+FOOTER = re.compile(r"(?im)\b(?:generated|made|created|written|built|prepared|authored|implemented|developed)\s+(?:with|by|using|in)\s+\[?[^\n]{0,60}")
+UNBLOCKS = re.compile(r"(?im)^[ \t>*\-\[\]xX]*unblocks[ \t]*:[ \t]*(.*)$")
+TITLE_ID = re.compile(r"\b([A-Z]{4}\d{5})\b", re.I)
+NOTHING = re.compile(r"^\W*(?:none|n/?a|no\b|nothing|-|—|–|tbd|unknown)", re.I)
 
 
 def disclosure(body):
@@ -82,29 +88,57 @@ def disclosure(body):
     return "missing", ""
 
 
-def classify(raw):
-    ai, ai_text = disclosure(raw.get("body"))
-    parts = [COMMENT.sub(" ", raw.get("body") or ""), raw.get("headRefName") or ""]
-    for commit in raw.get("commits", []):
-        parts.append(commit["message"])
-        parts += [f'{a["name"]} <{a["email"]}>' for a in commit["authors"]]
-    text = NOT_A_MENTION.sub(" ", "\n".join(parts))
-    branch = (raw.get("headRefName") or "").lower()
-    claude = bool(CLAUDE.search(text)) or branch.startswith("claude/")
-    gpt = bool(GPT.search(text)) or branch.startswith("codex/")
-    other = sorted(name for name, rx in OTHER.items() if rx.search(text))
+def unblocks(body):
+    match = UNBLOCKS.search(COMMENT.sub(" ", body or ""))
+    if not match:
+        return None
+    value = match.group(1).strip()
+    if not value or NOTHING.match(value) or re.match(r"(?i)\W*(?:gpus tested|ai-assisted|fixes|depends on)\s*:", value):
+        return []
+    ids = []
+    for found in TITLE_ID.findall(value):
+        found = found.upper()
+        if found not in ids:
+            ids.append(found)
+    return ids
+
+
+def group(claude, gpt, ai, other):
     if claude and gpt:
-        cat = "both"
-    elif claude:
-        cat = "claude"
-    elif gpt:
-        cat = "gpt"
-    elif ai == "yes" or other:
-        cat = "unknown"
-    elif ai == "no":
-        cat = "human"
-    else:
-        cat = "undeclared"
+        return "both"
+    if claude:
+        return "claude"
+    if gpt:
+        return "gpt"
+    if ai == "yes" or other:
+        return "unknown"
+    if ai == "no":
+        return "human"
+    return "undeclared"
+
+
+def classify(raw):
+    body = COMMENT.sub(" ", raw.get("body") or "")
+    ai, ai_text = disclosure(raw.get("body"))
+    branch = (raw.get("headRefName") or "").lower()
+    commits = raw.get("commits", [])
+    authors = [f'{a["name"]} <{a["email"]}>' for c in commits for a in c["authors"]]
+    everything = NOT_A_MENTION.sub(" ", "\n".join([body, raw.get("headRefName") or ""] + [c["message"] for c in commits] + authors))
+    sources = [body] + [c["message"] for c in commits]
+    strong_parts = [ai_text] + authors
+    for text in sources:
+        strong_parts += TRAILER.findall(text) + FOOTER.findall(text)
+    strong = NOT_A_MENTION.sub(" ", "\n".join(strong_parts))
+    evidence = {}
+    for tool, rx, prefix in (("claude", CLAUDE, "claude/"), ("gpt", GPT, "codex/")):
+        if rx.search(strong) or branch.startswith(prefix):
+            evidence[tool] = "strong"
+        elif rx.search(everything):
+            evidence[tool] = "mention"
+    other = sorted(name for name, rx in OTHER.items() if rx.search(everything))
+    cat = group("claude" in evidence, "gpt" in evidence, ai, other)
+    strict = group(evidence.get("claude") == "strong", evidence.get("gpt") == "strong",
+                   "yes" if ai == "yes" or evidence else ai, other)
     title = raw.get("title") or ""
     match = CONVENTIONAL.match(title)
     kind = match.group(1).lower() if match else "other"
@@ -130,10 +164,11 @@ def classify(raw):
         "type": kind,
         "ai": ai,
         "ai_note": ai_text.strip()[:80] if ai_text and ai_text.strip().lower() not in ("yes", "no") else "",
-        "claude": claude,
-        "gpt": gpt,
+        "evidence": evidence,
         "other": other,
         "cat": cat,
+        "cat_strict": strict,
+        "unblocks": unblocks(raw.get("body")),
         "bot": author.endswith("[bot]") or author in ("dependabot", "github-actions", "Copilot"),
     }
 
@@ -174,7 +209,11 @@ def fetch(full, page_size):
     raw = {} if full else {str(r["number"]): r for r in (load(RAW) or {}).get("prs", [])}
     slim = {} if full else {str(r["number"]): r for r in (load(SLIM) or {}).get("prs", [])}
     started = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    previous = None if full else (load(SLIM) or {}).get("fetchedAt")
+    stored = load(SLIM) or {}
+    previous = None if full else stored.get("fetchedAt")
+    if previous and stored.get("classifier") != CLASSIFIER_VERSION:
+        print(f"classifier changed ({stored.get('classifier')} -> {CLASSIFIER_VERSION}); refetching every PR")
+        previous, raw, slim = None, {}, {}
     if previous:
         since = (datetime.fromisoformat(previous.replace("Z", "+00:00")) - timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
         query = QUERY % ("UPDATED_AT", "DESC", FIELDS)
@@ -199,7 +238,7 @@ def fetch(full, page_size):
 
 def write_slim(fetched_at, records):
     SLIM.parent.mkdir(parents=True, exist_ok=True)
-    out = {"fetchedAt": fetched_at, "prs": sorted(records, key=lambda r: r["number"])}
+    out = {"fetchedAt": fetched_at, "classifier": CLASSIFIER_VERSION, "prs": sorted(records, key=lambda r: r["number"])}
     SLIM.write_text(json.dumps(out, separators=(",", ":")), encoding="utf-8")
     print(f"wrote {len(out['prs'])} PRs to {SLIM}")
 

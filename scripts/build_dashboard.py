@@ -46,8 +46,11 @@ def main():
     author_index = {a: i for i, a in enumerate(author_list)}
     others = sorted({o for p in prs for o in p["other"]})
 
-    cols = {k: [] for k in ("c", "m", "x", "k", "a", "t", "ad", "de", "h", "d", "dr")}
+    cols = {k: [] for k in ("c", "m", "x", "k", "ks", "a", "t", "ad", "de", "h", "d", "dr")}
     other_bits = {}
+    titles = sorted({t for p in prs if not p["bot"] for t in (p.get("unblocks") or [])})
+    title_index = {t: i for i, t in enumerate(titles)}
+    unblocking = {}
     for p in sorted((p for p in prs if not p["bot"]), key=lambda p: p["created"]):
         created, merged, closed = parse(p["created"]), parse(p["merged"]), parse(p["closed"])
         c = index[created.date().isoformat()]
@@ -55,6 +58,7 @@ def main():
         cols["m"].append(index[merged.date().isoformat()] - c if merged else -1)
         cols["x"].append(index[closed.date().isoformat()] - c if closed and not merged else -1)
         cols["k"].append(CATS.index(p["cat"]))
+        cols["ks"].append(CATS.index(p.get("cat_strict", p["cat"])))
         cols["a"].append(author_index[p["author"]])
         cols["t"].append(TYPES.index(p["type"]))
         cols["ad"].append(p["additions"])
@@ -63,11 +67,15 @@ def main():
         cols["h"].append(-1 if span < 0 else round(span, 1) if span < 10 else round(span))
         cols["d"].append(DISCLOSURE.index(p["ai"]))
         cols["dr"].append(1 if p["draft"] and p["state"] == "OPEN" else 0)
+        if p.get("unblocks"):
+            unblocking[len(cols["c"]) - 1] = [title_index[t] for t in p["unblocks"]]
         if p["other"]:
             other_bits[len(cols["c"]) - 1] = sum(1 << others.index(o) for o in p["other"])
-    for key in ("k", "t", "d", "dr"):
+    for key in ("k", "ks", "t", "d", "dr"):
         cols[key] = "".join(f"{v:x}" for v in cols[key])
     cols["o"] = other_bits
+    cols["u"] = unblocking
+    games = community.get("games", {})
 
     lib_names = sorted({n for d in progress for n in d.get("libs", {})})
     enc_names = sorted({n for d in progress for n in d.get("enc", {})})
@@ -100,6 +108,7 @@ def main():
         "types": TYPES,
         "disclosure": DISCLOSURE,
         "others": others,
+        "titles": [[t, games.get(t, {}).get("name"), games.get(t, {}).get("discussion")] for t in titles],
         "authors": author_list,
         "prs": cols,
         "progress": prog,

@@ -18,7 +18,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "data" / "progress.json"
 PATHS = ("core/libs/prx", "core/shader/recompiler/RdnaDecoder/include")
-TOOLS = ("tools/progress.py", "tools/nid_names.py", "tools/rdna_isa.txt")
+TOOLS = ("tools/progress.py", "tools/nid_names.py", "tools/rdna_isa.txt", "tools/shader_scan.py")
 
 
 def git(repo, *args, binary=False):
